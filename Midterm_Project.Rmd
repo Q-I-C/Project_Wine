@@ -1,0 +1,179 @@
+---
+title: "Evolution Of Shots Statistics For Los Ageles Lakers From 2016 To 2021 "
+author: "Qi Chen"
+output: 
+  ioslides_presentation: 
+    fig_width: 6
+    fig_height: 3.5
+    smaller: yes
+    fontsize: 11pt
+    fig_caption: yes
+---
+
+```{r Library Loading , include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(ggplot2)
+library(ggExtra)
+library(tidyverse)
+library(rvest)
+library(nbastatR)
+library(ncaahoopR)
+library(grid)
+library(jpeg)
+library(RCurl)
+library(hexbin)
+library(plyr)
+library(gganimate)
+library(viridis)
+library(hrbrthemes)
+library(plotly)
+```
+
+## Bullet points
+1. Examining the shots missed vs shots made for 6-year time frame 
+2. Analyzing the change in the locations of shots being attempted 
+3. Calculating and comparing the shooting percentage by year 
+4. Further discussion
+
+```{r Data Collection & Setup, include=FALSE}
+# Loading stored data file and creating desired data frames for future analysis
+
+#Sys.setenv("VROOM_CONNECTION_SIZE"=20000000)
+#nba_df1 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2016)
+#ba_df2 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2017)
+#nba_df3 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2018)
+#nba_df4 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2019)
+#nba_df5 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2020)
+#nba_df6 <- teams_shots(teams = "Los Angeles Lakers", seasons = 2021)
+#nba_df7 <- teams_shots(teams = "Miami Heat", seasons = 2020)
+#nba_df <- rbind(nba_df1, nba_df2, nba_df3, nba_df4, nba_df5, nba_df6)
+#nba_modified4 <- rbind(nba_df5, nba_df7)
+#save(nba_df, file = "mydata.RData")
+#save(nba_modified4, file = "mydata2.RData")
+
+load("mydata.RData")
+load("mydata2.RData")
+
+courtImg.URL <- "https://thedatagame.files.wordpress.com/2016/03/nba_court.jpg"
+court <- rasterGrob(readJPEG(getURLContent(courtImg.URL)),
+           width=unit(1,"npc"), height=unit(1,"npc"))
+
+nba_df_modified <- nba_df[which(!nba_df$zoneBasic == 'Backcourt'),]
+nba_df_modified2 <- ddply(nba_df_modified, .(zoneBasic, yearSeason), summarize, 
+                   shots_attempted = length(isShotAttempted),
+                   shots_made = sum(isShotMade == T),
+                   Mloc_X = mean(locationX),
+                   Mloc_Y = mean(locationY))
+nba_df_modified2$shot_accuracy <- (nba_df_modified2$shots_made/nba_df_modified2$shots_attempted)
+nba_df_modified2$shot_accuracy_lab <- paste(as.character(round(100 * nba_df_modified2$shot_accuracy, 1)), "%", sep="")
+
+nba_df_modified3 <- nba_df[which(!nba_df$zoneBasic ==c('Restricted Area','Backcourt')),]
+
+nba_df_modified4 <- nba_df_modified[which(nba_df_modified$namePlayer =='LeBron James'),]
+nba_df_modified5 <- ddply(nba_df_modified4, .(zoneBasic, yearSeason, namePlayer), summarize, 
+                   shots_attempted = length(isShotAttempted),
+                   shots_made = sum(isShotMade == T),
+                   Mloc_X = mean(locationX),
+                   Mloc_Y = mean(locationY))
+nba_df_modified5$shot_accuracy <- (nba_df_modified5$shots_made/nba_df_modified5$shots_attempted)
+nba_df_modified5$shot_accuracy_lab <- paste(as.character(round(100 * nba_df_modified5$shot_accuracy, 1)), "%", sep="")
+
+nba_2020_fin1 <- nba_modified4[which(!nba_modified4$zoneBasic == 'Backcourt'),]
+nba_2020_fin2 <- ddply(nba_2020_fin1, .(zoneBasic, yearSeason, nameTeam), summarize, 
+                   shots_attempted = length(isShotAttempted),
+                   shots_made = sum(isShotMade == T),
+                   Mloc_X = mean(locationX),
+                   Mloc_Y = mean(locationY))
+nba_2020_fin2$shot_accuracy <- (nba_2020_fin2$shots_made/nba_2020_fin2$shots_attempted)
+nba_2020_fin2$shot_accuracy_lab <- paste(as.character(round(100 * nba_2020_fin2$shot_accuracy, 1)), "%", sep="")
+
+mytheme <- theme(
+            plot.title = element_text(family = "Helvetica", face = "bold"),
+            legend.title = element_text(color = "black", face = "bold.italic", family = "Helvetica"),
+            legend.text = element_text(face = "italic", colour = "black", family = "Helvetica"),
+            axis.title = element_blank(),
+            axis.text = element_blank(),
+            )
+```
+
+## Scatter plot of total amount of shots group by type from 2016 to 2021
+```{r Figure 1, echo=FALSE}
+full_plot <- ggplot(nba_df_modified, aes(x=locationX, y=locationY)) + 
+              annotation_custom(court, -250, 250, -50, 420) +
+              geom_point(alpha = 1/8, aes(color = typeEvent), na.rm = T) +
+              scale_color_manual(values=c("gold", "purple")) +
+              xlim(-250, 250) +
+              ylim(-50, 420) 
+
+full_plot  + facet_wrap(vars(yearSeason))  + mytheme + labs(title = "Shot Chart By Type For LAL From 2016 To 2021")
+```
+These scatter plots contain two types of circles where the golden color and the purple color circles represent either the team made the shot or missed it, respectively. The positions of these circles are accurately placed on a picture of a half basketball court. We observe an increase of shots made in the restricted area as well as less shots missed outside the three-point line range in 2021.
+
+## Hexagon plot of total amount of shots taken from 2016 to 2021
+```{r Figure 2, echo=FALSE}
+hex_plot <- ggplot(nba_df_modified3, aes(x=locationX, y=locationY)) + 
+             annotation_custom(court, -250, 250, -50, 420) +
+             stat_binhex(bins = 20, color = "gray", alpha = 0.7, na.rm = T) +
+             scale_fill_gradientn(colors = c("gold", "purple"), trans = "log10") +
+             guides(scale = "none") +
+             xlim(250, -250) +
+             ylim(-50, 420) +
+             coord_fixed()
+
+hex_plot + facet_wrap(vars(yearSeason)) + mytheme + labs(title = "Shot Chart By Location For LAL From 2016 To 2021")
+```
+These alternative hexagon plots give a better visualization on how the team has gradually changed their choice of taking a shot on the basketball court. All the shots have been $log_(10)$ transformed to increase the shifting in shot location throughout the time frame. We notice a significant rise in amount of shots taken outside the three-point line range and a decline within the middle range.
+
+## Animation plot on evolution in shooting percentage
+```{r Figure 3,echo=FALSE}
+motion_plot <- nba_df_modified2 %>%
+  ggplot(aes(x=yearSeason, y=shot_accuracy_lab, group = zoneBasic, color = zoneBasic)) +
+    geom_line() +
+    geom_point() +
+    scale_color_viridis(discrete = T) +
+    theme_ipsum() +
+    labs(title = "Shots Acuuracy Chart In Percenatge (%)", x = "Year", y = "Accuracy in percentage(%)") +
+    transition_reveal(yearSeason) +
+    mytheme
+#save(motion_plot, file = "Motion.Rdata")
+motion_plot
+```
+ This animation plot vividly demonstrates the evolution of shots accuracy from 2016 to 2021 where we find that despite the team shows an increase in shooting percentage for every type of shot, there is still a drastic drop in 2019 for all shots except for mid-range and restricted area.
+ 
+## Futher discussion 
+Are team statistics good indicator ?
+
+```{r Figure 4, echo=FALSE}
+percentage_plot <- ggplot(nba_2020_fin2, aes(x=Mloc_X, y=Mloc_Y)) + 
+                    annotation_custom(court, -250, 250, -50, 420) +
+                    xlim(250, -250) +
+                    ylim(-50, 420) +
+                    coord_fixed() +
+                    geom_point(aes(color = zoneBasic, size = shot_accuracy, shape = nameTeam), alpha = 0.7) +
+                    geom_text(aes(colour = zoneBasic, label = shot_accuracy_lab), vjust = -1.2, size = 3)
+percentage_plot + mytheme + labs(title = "Shots Accuracy Chart for LAL vs MIA In 2020")
+
+```
+In this comparison plot, we are able to see how are the two teams differ in terms of shooting percentage. As we know, the Lakers won the NBA championship in 2020, however, we are seeing that the Heat shot relatively better than the Lakers in almost everywhere except for left corner. It is really interesting and somewhat an indication of a team's statistics maybe not a best fit for determining its strength.
+
+## Further Discussion
+Individual Player analysis instead
+```{r Figure 5, echo=FALSE}
+nba_df_modified5 %>% plot_ly(
+                       x = ~yearSeason, 
+                       y = ~shot_accuracy_lab, 
+                       color = ~zoneBasic, 
+                       frame = ~yearSeason, 
+                       text = ~namePlayer, 
+                       hoverinfo = "text",
+                       type = 'scatter',
+                       mode = 'markers'
+                       ) %>%
+                       layout(
+                        xaxis = list(
+                        type = "log"
+                        )
+                       )
+```
+This is an interactive plot to analyze shooting statistics of LeBron James since he joined the Lakers. It maybe give us additional information how a single player could bring to a team.
+
