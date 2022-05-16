@@ -1,0 +1,316 @@
+---
+title: "STAT 345 Final"
+author: "Charlie Handrick, Qi Chen, Brandon Miller"
+date: '2022-04-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Libraries, include=FALSE}
+library(tidyverse)
+library(rvest)
+library(markovchain)
+library(stringr)
+library(tidytext)
+library(stringi)
+##URL of wine list
+url <- "https://top100.winespectator.com/lists/"
+```
+
+1) Read in and clean the data. Load in a collection of wine reviews into R. Feel free to choose which type of reviews you want to use, but the collection should include a variety of wine types. For example, you could use http://www.winespectator.com/dailypicks/category/catid/3, if you prefer fancy, overpriced wine. You should collect the review date, the wine name, the rating, the cost, and the review. When cleaning/processing the text, you may want to separate punctuation without removing it. It would also be a good idea to separate out the last couple of sentences regarding when to drink and how many cases were made/produced/imported, if you are able.
+
+```{r Data importing}
+##Turning online html table into dataframe
+wine <- read_html(url)
+wine_table <- wine %>% html_nodes("table")
+wine_table <- wine_table %>% html_table
+wine_table <- as.data.frame(wine_table)
+```
+
+```{r Data cleaning, include=FALSE}
+##Cleaning up each review of excess blank spaces, and removing last few lines of author and cases made, as well as score and price because we already have columns of that,
+wine_table <- wine_table %>% separate(Wine, c("Wine","Review"), sep = "[+]")
+clean_wine <- wine_table %>% mutate(Review = str_trim(str_sub(wine_table$Review, 2, -1), side = "both"))
+clean_wine <- clean_wine[-7]
+clean_wine <- clean_wine %>% mutate(Review = strsplit(clean_wine$Review, "[.]")) #Split Review by comma into list
+clean_wine <- clean_wine %>% unnest_wider(Review) # Unlist Review into multiple columns 
+
+clean_wine <- clean_wine %>% mutate_at(vars(starts_with("...")), funs(case_when(str_detect(., "[0-9]") == TRUE ~ NA_character_,
+                                                                                TRUE ~ .)))
+##Removing Blank NA columns
+clean_wine <- clean_wine[, -c(7:9)]
+
+clean_wine[is.na(clean_wine)] <- " "
+##Joining reviews back together after cleaning
+clean_wine <- clean_wine %>% unite("Rev", ...1:...3)
+clean_wine <- clean_wine %>% unite("Review", Rev:...4)
+##Making punctuation count as its own word by adding spaces before and after.
+clean_wine <- clean_wine %>%  mutate( Review = Review %>%  
+             str_replace_all(pattern = "[.]", replacement = " .") %>% 
+             str_replace_all(pattern = "[!]", replacement = " !") %>% 
+             str_replace_all(pattern = "[,]", replacement = " ,") %>% 
+             str_replace_all(pattern = "[_]", replacement = " "))
+
+```
+
+2) Your goal is to use a first-order Markov chain to create a function that generates a wine review, and you may do this with pre-programmed functions or self-written functions, and you may loops if you’d like. Potential steps, if you so desire: You should determine the state space. For each value in that state space, compute an empirical estimate of transition probabilities to the other values in the state space (i.e., compute Pr(Xn+1=x∣Xn=xn)). Be careful, this could be a really big object potentially. Your function inputs could be a starting word, the number of sentences to generate, and your transition probabilities. The output should be your fake review text. Generate 100 reviews and report back the 5 best, 5 worst, and (potentially) 5 funniest/silliest.
+
+```{r First order markov chain }
+##Creating a vector of all words from each review
+word <- strsplit(clean_wine$Review,"[[:space:]]|(?=[.!?])",perl=TRUE)
+words <- unlist(word)
+##Removing specific date related terms
+words <- words[words != ""]
+words <- words[words != "drink"]
+words <- words[words != "now"]
+##Fitting our markov chain model for first order.
+fit_markov <- markovchainFit(words)
+#########
+#Title: FakeWineFirst
+#Description: Creates a fake wine review using a first order markov chain
+#Inputs: Number of words, The desired first word, and number of iterations
+#Outputs: desired number of fake wine reviews.
+#########
+FakeWineFirst = function(nwords =20, firstword = "The", nloop = 100) {
+  
+  for (i in 1:nloop) {
+  ##Setting seed for loop
+   set.seed(2*i)
+  ##From package(markovchain), runs a first order chain using MLE.
+   markovchainSequence(n = nwords, 
+                       markovchain = fit_markov$estimate,
+                       t0 = firstword, include.t0 = T) %>% 
+
+   # joint words
+   paste(collapse = " ") %>% 
+      
+   # create proper sentence form and fixes punctuation from before.
+   str_replace_all(pattern = " ,", replacement = ",") %>% 
+   str_replace_all(pattern = " [.]", replacement = ".") %>% 
+   str_replace_all(pattern = " [!]", replacement = "!") %>% 
+   ##Turns word list created into sentence form
+   str_to_sentence() %>% 
+   ##Prints the output of chain.
+   print()
+  }
+}
+
+FakeWineFirst(20, "This", 100)  
+```
+
+3) Second-Order Markov Chain. Repeat part (b), but with a second-order Markov chain, where
+Pr(Xn+1=x∣X1=x1,X2=x2,...,Xn=xn)=Pr(Xn+1=x∣Xn=xn,Xn−1=xn−1).
+In other words, the next state depends on the current state and the previous state. Does this procedure yield better results than the first-order Markov chain from part (b)? Why or why not?
+
+```{r}
+#This fits our word list to a second order markov chain using bigrams
+bigram_wine <- clean_wine %>% 
+   unnest_tokens(bigram, Review, token = "ngrams", n = 2) %>% 
+   pull(bigram)
+markov_bigram <- markovchainFit(bigram_wine)
+#########
+#Title: FakeWineSecond
+#Description: Creates a fake wine review using a second order markov chain
+#Inputs: Number of words, The desired first two words, and number of iterations
+#Outputs: desired number of fake wine reviews.
+#########
+FakeWineSecond = function(nwords, firstword = "this is", nloop) {
+
+  for (i in 1:nloop) {
+  ##Adds back the first word to the chain  
+   b <-"This"
+  ##Sets seed for loop
+   set.seed(i)
+  ##Stores the output of reviews to an object
+   a <- markovchainSequence(n = nwords, 
+                       markovchain = markov_bigram$estimate,
+                       t0 = firstword, include.t0 = T) %>%
+  ##This function removes the repeated words created by the chain, (i.e. the chain runs like   this. this this is is a a ...)   
+   stri_extract_last_words() %>%  
+   # joint words
+   paste(collapse = " ") %>% 
+   # create proper sentence form and fixes punctuation
+   str_replace_all(pattern = " ,", replacement = ",") %>% 
+   str_replace_all(pattern = " [.]", replacement = ".") %>% 
+   str_replace_all(pattern = " [!]", replacement = "!") %>% 
+  ##Turns word list into sentence of lowercase words
+   str_to_sentence() %>% str_to_lower()
+  ##Creating an object to add the first word of the sentence back with the rest.
+   c <- paste(b,a)
+  ##Print Wine reviews 
+   print(c)  
+    }
+  }
+
+FakeWineSecond(20, "this is", 100)
+
+```
+
+
+4) Spruce ’em Up. Add features to your review function that mimic the additional features of the Wine Spectator reviews. These include a date, a score, a price, when to drink, and how many cases were made/produced/imported. If possible, try to generate these values more believably than completely independent random chance.
+
+```{r}
+#########
+#Title: SpruceFake
+#Description: Creates a fake wine review using a first order markov chain and adds more output
+#Inputs: Number of words, The desired first word, and number of iterations
+#Outputs: desired number of fake wine reviews with score and price and vintage date.
+#########
+SpruceFake <-  function(nwords =20, firstword = "The", nloop = 100) {
+  for (i in 1:nloop) {
+  ##Setting seed for loop
+   set.seed(2*i)
+  ##From package(markovchain), runs a first order chain using MLE.
+   markovchainSequence(n = nwords, 
+                       markovchain = fit_markov$estimate,
+                       t0 = firstword, include.t0 = T) %>% 
+   # joint words
+   paste(collapse = " ") %>% 
+   # create proper sentence form and fixes punctuation from before.
+   str_replace_all(pattern = " ,", replacement = ",") %>% 
+   str_replace_all(pattern = " [.]", replacement = ".") %>% 
+   str_replace_all(pattern = " [!]", replacement = "!") %>% 
+   ##Turns word list created into sentence form
+   str_to_sentence() %>% 
+   ##Prints the output of chain.
+   print()
+   ##The below lines of code sample the price, vintage and score from all our data and randomly pick one to be printed.
+   FakePrice <- sample(clean_wine$Price, 1)
+   FakeDate <- sample(clean_wine$Vintage, 1)
+   FakeScore <- sample(clean_wine$Score, 1)
+  ##Prints the fake price, vintage and score.
+  print(paste("Price: ", FakePrice, " | Score: ", FakeScore))
+  print(paste("Vintage Date: ", FakeDate))
+  }
+}
+
+SpruceFake(40, "the", 10)
+```
+
+
+5) Spruce ’em Up Some More. Modify your review function to incorporate the type of wine for which you are generating a review. You can do this broadly (e.g., red vs. white) or by type (e.g.,pinot grigio, merlot, etc.). Keep in mind that you need a sufficient number of sample reviews in each chosen category in order to generate reasonable fake reviews.
+```{r include=FALSE}
+##Cleaning the data for pinot wine
+pinot_wine <- clean_wine %>% mutate(Wine = strsplit(clean_wine$Wine, " ")) #Split Review by comma into list
+pinot_wine <- pinot_wine %>% unnest_wider(Wine) # Unlist Review into multiple columns 
+
+pinot_wine <- pinot_wine %>% mutate_at(vars(starts_with("...")), funs(case_when(str_detect(., "Pinot") == TRUE ~ .,
+                                                                     FALSE ~ NA_character_)))
+
+pinot_wine <- pinot_wine[, -c(6:13)]
+
+pinot_wine[is.na(pinot_wine)] <- " "
+
+pinot_wine <- pinot_wine %>% unite("wine", ...1:...3)
+pinot_wine <- pinot_wine %>% unite("Wine", wine:...4)
+
+pinot_wine <- pinot_wine %>%  mutate( Review = Review %>%  
+             str_replace_all(pattern = "[.]", replacement = " .") %>% 
+             str_replace_all(pattern = "[!]", replacement = " !") %>% 
+             str_replace_all(pattern = "[,]", replacement = " ,") )
+pinot_wine <- pinot_wine %>% filter(grepl('[a-zA-Z]', Wine))
+##Creating a word vector for pinot
+pword <- strsplit(pinot_wine$Review,"[[:space:]]|(?=[.!?])",perl=TRUE)
+pwords <- unlist(pword)
+pwords <- pwords[pwords != ""]
+pwords <- pwords[pwords != "drink"]
+pwords <- pwords[pwords != "now"]
+##Fitting a markov model for pinot
+pinot_fit <- markovchainFit(pwords)
+##########################################################################################
+##Cleaning the data for cabrenet
+cab_wine <- clean_wine %>% mutate(Wine = strsplit(clean_wine$Wine, " ")) #Split Review by comma into list
+cab_wine <- cab_wine %>% unnest_wider(Wine) # Unlist Review into multiple columns 
+
+cab_wine <- cab_wine %>% mutate_at(vars(starts_with("...")), funs(case_when(str_detect(.,      "Cabernet") == TRUE ~ .,
+                                                                     FALSE ~ NA_character_)))
+cab_wine <- cab_wine[, -c(5:13)]
+cab_wine[is.na(cab_wine)] <- " "
+
+cab_wine <- cab_wine %>% unite("wine", ...1:...3)
+
+cab_wine <- cab_wine %>%  mutate( Review = Review %>%  
+             str_replace_all(pattern = "[.]", replacement = " .") %>% 
+             str_replace_all(pattern = "[!]", replacement = " !") %>% 
+             str_replace_all(pattern = "[,]", replacement = " ,") )
+cab_wine <- cab_wine %>% filter(grepl('[a-zA-Z]', wine))
+##Making a words vector for cab
+cword <- strsplit(cab_wine$Review,"[[:space:]]|(?=[.!?])",perl=TRUE)
+cwords <- unlist(cword)
+cwords <- cwords[cwords != ""]
+cwords <- cwords[cwords != "drink"]
+cwords <- cwords[cwords != "now"]
+##Fitting a model for cab words
+cab_fit <- markovchainFit(cwords)
+```
+
+
+
+
+```{r}
+#########
+#Title: MoreSprucedFake
+#Description: Creates a fake wine review using a first order markov chain and adds more output
+#Inputs: Number of words, The desired first word, number of iterations, and type of Wine (Pinot or Cabrenet)
+#Outputs: desired number of fake wine reviews with score and price and vintage date.
+#########
+MoreSprucedFake <-  function(nwords =20, firstword = "The", nloop = 100, WineType = "Pinot") {
+ ##Sets fit equal to the fit of the desired wine
+  if(WineType == "Pinot"){
+   fit = pinot_fit
+ }
+  else{
+    fit = cab_fit
+  }
+  ########################################
+   for (i in 1:nloop) {
+  ##Setting seed for loop
+   set.seed(2*i)
+  ##From package(markovchain), runs a first order chain using MLE.
+   markovchainSequence(n = nwords, 
+                       markovchain = fit$estimate,
+                       t0 = firstword, include.t0 = T) %>% 
+   # joint words
+   paste(collapse = " ") %>% 
+   # create proper sentence form and fixes punctuation from before.
+   str_replace_all(pattern = " ,", replacement = ",") %>% 
+   str_replace_all(pattern = " [.]", replacement = ".") %>% 
+   str_replace_all(pattern = " [!]", replacement = "!") %>% 
+   ##Turns word list created into sentence form
+   str_to_sentence() %>% 
+   ##Prints the output of chain.
+   print()
+   ##The below lines of code sample the price, vintage and score from all our data and randomly pick one to be printed.
+   FakePrice <- sample(clean_wine$Price, 1)
+   FakeDate <- sample(clean_wine$Vintage, 1)
+   FakeScore <- sample(clean_wine$Score, 1)
+  ##Prints the fake price, vintage and score.
+  print(paste("Price: ", FakePrice, " | Score: ", FakeScore))
+  print(paste("Vintage Date: ", FakeDate))
+  }
+  ######################################
+}
+
+MoreSprucedFake(40, "This", 1, "Pinot")
+MoreSprucedFake(40, "This", 1, "Cabernet")
+```
+##For Presentation##
+```{r warning=FALSE}
+# first order markov chain word cloud visualization
+library(wordcloud)
+library(RColorBrewer)
+set.seed(123)
+wordcloud(words = unique(words), freq = fit_markov$estimate@transitionMatrix, min.freq = 0, max.words=3989, random.order=FALSE, rot.per=0, colors=brewer.pal(8, "Dark2"))
+set.seed(123)
+wordcloud(words = unique(pwords), freq = pinot_fit$estimate@transitionMatrix, min.freq = 0, max.words=3989, random.order=FALSE, rot.per=0, colors=brewer.pal(8, "Dark2"))
+set.seed(123)
+wordcloud(words = unique(cwords), freq = cab_fit$estimate@transitionMatrix, min.freq = 0, max.words=3989, random.order=FALSE, rot.per=0, colors=brewer.pal(8, "Dark2"))
+```
+
+
+
+
