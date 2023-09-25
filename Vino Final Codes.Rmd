@@ -1,0 +1,230 @@
+---
+title: "STAT 345 Final"
+author: "Charlie Handrick, Qi Chen, Brandon Miller"
+date: '2022-04-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Libraries, include=FALSE}
+library(tidyverse) # Usage of data manipulation and data tidying
+library(rvest) # Usage of web scraping 
+library(markovchain) # Usage of discrete time Markov Chain
+library(tidytext) # Usage of text mining and analyzing 
+library(stringi) # Usage of string processing
+```
+
+1) Read in and clean the data. Load in a collection of wine reviews into R. Feel free to choose which type of reviews you want to use, but the collection should include a variety of wine types. For example, you could use http://www.winespectator.com/dailypicks/category/catid/3, if you prefer fancy, overpriced wine. You should collect the review date, the wine name, the rating, the cost, and the review. When cleaning/processing the text, you may want to separate punctuation without removing it. It would also be a good idea to separate out the last couple of sentences regarding when to drink and how many cases were made/produced/imported, if you are able.
+
+```{r Data Importing & Transforming, include=FALSE}
+# URL of top 100 wine ranking list from 2021
+# Turning online html table into dataframe
+
+url <- "https://top100.winespectator.com/lists/"
+wine <- read_html(url)
+wine_table <- wine %>% html_nodes("table")
+wine_table <- wine_table %>% html_table
+wine_table <- as.data.frame(wine_table)
+```
+
+```{r Data Cleaning, include=FALSE}
+# Removing repetitive phrases (e.g., "xxx case made, xxx case imported", "Drink now through xxx") and redundant data like price and score to improve input quality
+# Removing any unnecessary white spaces
+# Removing extra empty column
+wine_table <- wine_table %>% separate(Wine, c("Wine","Review"), sep = "\\+-")
+clean_wine <- wine_table %>% mutate(Review = str_remove(Review,"(?:\\d{1,3}(?:,\\d{3})? cases made, \\d{1,3}(?:,\\d{3})? cases imported|\\d{1,3}(?:,\\d{3})? cases made|\\d{1,3}(?:,\\d{3})? cases imported).*"),
+                                    Review = str_trim(Review, side = "left"))
+
+clean_wine <- clean_wine %>% mutate(Review = str_remove(Review, "(?: Drink now|Best from).*"))
+clean_wine$Review <- trimws(clean_wine$Review)
+clean_wine <- clean_wine[,-7]
+```
+
+
+```{r Data cleaning_2, include=FALSE}
+# Defining and common contractions and their expansions
+# Defining Function to expand contractions
+# Staging wine reviews using predefined function
+
+contractions <- list(
+  "\\b(It['’]s)\\b" = "It is",
+  "\\b(There['’]s)\\b" = "There is",
+  "\\b(it['’]s)\\b" = "it is",
+  "\\b(there['’]s)\\b" = "there is"
+  #... Add more contractions as needed
+)
+
+expand_contractions <- function(text, contractions) {
+  for (pattern in names(contractions)) {
+    replacement <- contractions[[pattern]]
+    text <- gsub(pattern, replacement, text, perl = TRUE)
+  }
+  return(text)
+}
+
+clean_wine$Review <- sapply(clean_wine$Review, expand_contractions, contractions = contractions)
+
+```
+
+
+2) Your goal is to use a first-order Markov chain to create a function that generates a wine review, and you may do this with pre-programmed functions or self-written functions, and you may loops if you’d like. Potential steps, if you so desire: You should determine the state space. For each value in that state space, compute an empirical estimate of transition probabilities to the other values in the state space (i.e., compute Pr(Xn+1=x∣Xn=xn)). Be careful, this could be a really big object potentially. Your function inputs could be a starting word, the number of sentences to generate, and your transition probabilities. The output should be your fake review text. Generate 100 reviews and report back the 5 best, 5 worst, and (potentially) 5 funniest/silliest.
+
+```{r First order markov chain, include=FALSE}
+# Splitting the 'Review' column into tokens based on spaces or punctuation marks.
+# Fitting first order markov chain model
+
+tokens_list <- str_split(clean_wine$Review, pattern = "\\s|(?<=[,\\.!?])|(?=[,\\.!?])")
+fit_markov <- markovchainFit(tokens_list)
+FakeWineFirst = function(nwords, firstword = "The", nloop) {
+  
+  for (i in 1:nloop) {
+    # Optional: set.seed for reproducibility
+    set.seed(2*i)
+    
+    # Generate sequence using the Markov chain
+    sequence <- markovchainSequence(n = nwords, 
+                                    markovchain = fit_markov$estimate,
+                                    t0 = firstword, 
+                                    include.t0 = TRUE) 
+
+    # Join words without any further correction for punctuation
+    output <- paste(sequence, collapse = " ")
+
+    # Append a period at the end if not present
+    if (!endsWith(output, ".")) {
+      output <- paste0(output, ".")
+    }
+    
+    # Print the result
+    print(output)
+  }
+}
+```
+
+```{r Test_1 Using First Order Markov, include=FALSE}
+FakeWineFirst(20, "A", 10)  
+```
+
+
+3) Second-Order Markov Chain. Repeat part (b), but with a second-order Markov chain, where
+Pr(Xn+1=x∣X1=x1,X2=x2,...,Xn=xn)=Pr(Xn+1=x∣Xn=xn,Xn−1=xn−1).
+In other words, the next state depends on the current state and the previous state. Does this procedure yield better results than the first-order Markov chain from part (b)? Why or why not?
+
+```{r Second order markov chain, include=FALSE}
+#Creating bigram pairs for second order markov chain
+
+bigram_tokens_list <- lapply(tokens_list, function(tokens) {
+  # Ensure there are at least 2 words to create a bigram
+  if (length(tokens) < 2) 
+    return(NULL)
+  
+  # Adjust the sequence to pick every second token
+  indices <- seq(1, length(tokens) - 1, by = 2)
+  bigrams <- sapply(indices, function(i) {
+    if (i == length(tokens)) 
+      return(NULL) # to ensure no index out of bounds
+    paste(tokens[i], tokens[i + 1], sep = " ")
+  })
+
+  return(bigrams)
+})
+
+fit_markov_2 <- markovchainFit(bigram_tokens_list)
+FakeWineSecond = function(nwords, firstwords = "This is", nloop) {
+  
+  for (i in 1:nloop) {
+    # Optional: set.seed for reproducibility
+    set.seed(2*i)
+
+    # Ensure that your method for sequence generation can handle bigrams!
+    sequence <- markovchainSequence(n = nwords, 
+                                    markovchain = fit_markov_2$estimate,
+                                    t0 = firstwords, 
+                                    include.t0 = TRUE) 
+
+    # Join words without any further correction for punctuation
+    output <- paste(sequence, collapse = " ")
+
+    # Append a period at the end if not present
+    if (!endsWith(output, ".")) {
+      output <- paste0(output, ".")
+    }
+    
+    # Print the result
+    print(output)
+  }
+}
+```
+
+
+```{r Test_2 Using Second Markov, include=FALSE}
+FakeWineSecond(20,"This is", 1)
+```
+
+
+4) Spruce ’em Up. Add features to your review function that mimic the additional features of the Wine Spectator reviews. These include a date, a score, a price, when to drink, and how many cases were made/produced/imported. If possible, try to generate these values more believably than completely independent random chance.
+
+
+```{r Remodified First Order Markov Chain}
+
+clean_wine$Price <- as.numeric(gsub("\\$", "", clean_wine$Price))
+clean_wine <- clean_wine %>% mutate(Vintage = as.numeric(Vintage))
+
+FakeWineFirst_modified <- function(nwords, firstword = "The", nloop) {
+  
+  # Extract statistical information for features
+  mean_price <- mean(clean_wine$Price, na.rm = TRUE)
+  sd_price <- sd(clean_wine$Price, na.rm = TRUE)
+  
+  mean_score <- mean(clean_wine$Score, na.rm = TRUE)
+  sd_score <- sd(clean_wine$Score, na.rm = TRUE)
+  
+  available_vintages <- unique(clean_wine$Vintage)
+   
+  for (i in 1:nloop) {
+    set.seed(2*i)
+    
+    # Generate sequence using the Markov chain
+    sequence <- markovchainSequence(n = nwords, 
+                                    markovchain = fit_markov$estimate,
+                                    t0 = firstword, 
+                                    include.t0 = TRUE) 
+
+    # Join words without any further correction for punctuation
+    output <- paste(sequence, collapse = " ")
+
+    # Append a period at the end if not present
+    if (!endsWith(output, ".")) {
+      output <- paste0(output, ".")
+    }
+
+    # Generate Features:
+    vintage <- sample(available_vintages, 1) # Random vintage from available ones
+    score <- sample(70:100, 1) # Random score between 70 to 100
+    price <- round(rnorm(1, mean_price, sd_price)) # Random price around the mean
+    drink_year <- sample(vintage:(vintage + 10), 2) # Random drink year based on the vintage, assuming max of 7 years
+    cases_made <- sample(500:100000, 1) # Random cases around the mean
+    cases_imported <- sample(0:cases_made, 1)
+    # Print the results with additional features
+    cat(paste(output, 
+              "Best from", paste0(drink_year[1]," ", "through", " ", drink_year[2]), ".",
+              cases_made, "cases made",",", cases_imported, "cases imported",".",
+              "Score:", score, 
+              "| Price:","$",price))
+  }
+}
+```
+
+
+```{r Test_3 Using Modified First Order Markov}
+FakeWineFirst_modified(20, "This", 1)
+```
+
+
+
+
+
