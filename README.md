@@ -1,3 +1,6 @@
+# Project_wine
+
+
 ## What is a Markov Chain? 
 
 At its core, a Markov chain is a mathematical concept that describes a sequence of events, where the probability of transitioning from one event to another is solely dependent on the current state. In simpler terms, it is a process that moves from one state to another, with the next state determined only by the current configuration.
